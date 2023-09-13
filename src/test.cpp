@@ -37,8 +37,8 @@ int main(int argc, char** argv)
 {
     std::vector<char> file = readFileToVector("tzdata2023c.tar.gz");
 
-    Timezones tzs;
-    int result = parse_iana_tzdb_targz(&tzs, file.data(), (int)file.size());
+    utz_timezones tzs;
+    int result = utz_parse_iana_tzdb_targz(&tzs, file.data(), (int)file.size());
     if (!result)
     {
         printf("ERROR: %s", tzs.parsing_error);
@@ -50,7 +50,7 @@ int main(int argc, char** argv)
     {
         printf("TZ: %s\n", tzs.timezones[i].name);
 
-        cca_size += tzs.timezones[i].range_count * sizeof(Time_Range);
+        cca_size += tzs.timezones[i].range_count * sizeof(utz_time_range);
         for (int j = 0; j < tzs.timezones[i].range_count; j++)
         {
             auto& r = tzs.timezones[i].ranges[j];
