@@ -1619,8 +1619,8 @@ typedef struct utz_parsed_zone
 
 typedef struct utz_parsed_link
 {
-    utz_string zone_main;
-    utz_string zone_alias;
+    char zone_main [32 + 1];
+    char zone_alias[32 + 1];
 } utz_parsed_link;
 
 
@@ -1754,7 +1754,7 @@ int utz_parse_iana_tzdb_targz(utz_timezones* tzs, void* targz, int targz_size, v
         utz_parsed_zone* zones;
     } utz_zones_bundle;
 
-    utz_parsed_link*  last_parsed_link  = NULL;
+    utz_parsed_link*  last_parsed_links = NULL;
     utz_rules_bundle* last_rule_bundles = NULL;
     utz_zones_bundle* last_zone_bundles = NULL;
 
@@ -1814,7 +1814,7 @@ int utz_parse_iana_tzdb_targz(utz_timezones* tzs, void* targz, int targz_size, v
 
     utz_parsed_link* links = NULL;
     UtzMakeDynArray(utz_parsed_link, &links, 128);
-    last_parsed_link = links;
+    last_parsed_links = links;
 
     for (utz_usize i = 0; i < UtzArrayCount(timezone_filenames); i++)
     {
@@ -2060,16 +2060,20 @@ int utz_parse_iana_tzdb_targz(utz_timezones* tzs, void* targz, int targz_size, v
 
                 if (!utz_peek(line, UTZ_TOKEN_WORD))
                     ReportStaticError("Missing zone.zone_main.");
-                link.zone_main = utz_next(&line);
+
+                utz_string zm = utz_next(&line);
+                CopyToCharArray(zm, link.zone_main, "parsing link (zone_main)");
 
                 if (!utz_peek(line, UTZ_TOKEN_WORD))
                     ReportStaticError("Missing zone.zone_alias.");
-                link.zone_alias = utz_next(&line);
+                
+                utz_string za = utz_next(&line);
+                CopyToCharArray(za, link.zone_alias, "parsing link (zone_alias)");
 
                 if (utz_next(&line).length) ReportStaticError("Expected end of line but got garbage.");
 
                 UtzDynAppend(utz_parsed_link, &links, &link);
-                last_parsed_link = links;
+                last_parsed_links = links;
             }
             else
             {
@@ -2079,21 +2083,15 @@ int utz_parse_iana_tzdb_targz(utz_timezones* tzs, void* targz, int targz_size, v
         current_file = {};
         current_line = {};
 
+        SortByCharArray(utz_parsed_link, zone_alias, links);
 
         for (utz_usize zone_bundle_idx = 0; zone_bundle_idx < UtzDynCount(zone_bundles); zone_bundle_idx++)
         {
             utz_zones_bundle* it = &zone_bundles[zone_bundle_idx];
 
-            // @Reconsider binary search
-            utz_bool is_alias = UTZ_FALSE;
-            for (utz_usize i = 0; i < UtzDynCount(links); i++)
-                if (utz_equals(it->name, links[i].zone_alias))
-                {
-                    is_alias = UTZ_TRUE;
-                    break;
-                }
-            if (is_alias) continue;
-
+            utz_parsed_link* alias_link = FindByCharArray(utz_parsed_link, zone_alias, links, it->name);
+            if (alias_link) continue;
+            
             utz_timezone* timezone = NULL;
             {
                 utz_timezone zero = UtzInit;
@@ -2257,25 +2255,22 @@ int utz_parse_iana_tzdb_targz(utz_timezones* tzs, void* targz, int targz_size, v
     }
 
     // resolve timezones and links.
+    
+    SortByCharArray(utz_timezone, name, tzs->timezones);
 
     utz_usize timezone_count_before_links = UtzDynCount(tzs->timezones);
     for (utz_usize i = 0; i < UtzDynCount(links); i++)
     {
-        utz_timezone* main = NULL;
-        for (utz_usize j = 0; j < timezone_count_before_links; j++)
-            if (utz_equals(links[i].zone_main, tzs->timezones[j].name))
-            {
-                main = &tzs->timezones[i];
-                break;
-            }
-        if (!main) ReportError("Can't resolve alias '%.*s' because main zone '%.*s' doesn't exist.",
-                               UtzStringArgs(links[i].zone_alias), UtzStringArgs(links[i].zone_main));
+        
+        utz_timezone* main = FindByCharArray(utz_timezone, name, tzs->timezones, UtzStr(links[i].zone_main));
+        if (!main) ReportError("Can't resolve alias '%s' because main zone '%s' doesn't exist.",
+                               links[i].zone_alias, links[i].zone_main);
 
 
         UtzDynAppend(utz_timezone, &tzs->timezones, main);
         utz_timezone* newtz = UtzDynGetLast(tzs->timezones);
         newtz->alias_of = main;
-        CopyToCharArray(links[i].zone_alias, newtz->name, "creating a link");
+        CopyToCharArray(UtzStr(links[i].zone_alias), newtz->name, "creating a link");
     }
 
     for (utz_usize i = 0; i < UtzDynCount(tzs->timezones); i++)
@@ -2295,8 +2290,9 @@ int utz_parse_iana_tzdb_targz(utz_timezones* tzs, void* targz, int targz_size, v
         }
     }
 
-    tzs->timezone_count = UtzDynCount(tzs->timezones);
     SortByCharArray(utz_timezone, name, tzs->timezones);
+    tzs->timezone_count = UtzDynCount(tzs->timezones);
+    
 
     //
     // parse countries.
@@ -2462,7 +2458,7 @@ int utz_parse_iana_tzdb_targz(utz_timezones* tzs, void* targz, int targz_size, v
 
     }
 cleanup:;
-    UtzFreeDynArray(&last_parsed_link);
+    UtzFreeDynArray(&last_parsed_links);
     FreeNestedDynArray(&last_rule_bundles, rules);
     FreeNestedDynArray(&last_zone_bundles, zones);
     return (tzs->parsing_error == NULL);
