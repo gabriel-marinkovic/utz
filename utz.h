@@ -6,17 +6,16 @@
 
 
 #ifndef UTZ_OVERRIDE_TYPES
-  #include <stddef.h>
   #include <stdint.h>
 
-  typedef int64_t  utz_time_t;
+  typedef int64_t   utz_time_t;
 
-  typedef uint8_t  utz_u8;
-  typedef uint16_t utz_u16;
-  typedef uint32_t utz_u32;
-  typedef int32_t  utz_s32;
-  typedef uint64_t utz_u64;
-  typedef size_t   utz_usize;
+  typedef uint8_t   utz_u8;
+  typedef uint16_t  utz_u16;
+  typedef uint32_t  utz_u32;
+  typedef int32_t   utz_s32;
+  typedef uint64_t  utz_u64;
+  typedef uintptr_t utz_usize;
 #endif
 
 
@@ -27,15 +26,16 @@
   #define UtzFree(userdata_ptr, ptr)                 (free(ptr))
 #endif
 
-#ifndef UTZ_OVERRIDE_SPRINTF
-  #include <stdio.h>
-  #define UtzSprintf(buffer, size, fmt, ...) snprintf((buffer), (size), fmt, ##__VA_ARGS__)
-#endif
-
 #ifndef UTZ_OVERRIDE_ASSERT
   #include <assert.h>
   #define UtzAssert(condition) assert(condition)
 #endif
+
+#if !defined(UTZ_OVERRIDE_SPRINTF) && !defined(UTZ_NO_SPRINTF)
+  #include <stdio.h>
+  #define UtzSprintf(buffer, size, fmt, ...) snprintf((buffer), (size), fmt, ##__VA_ARGS__)
+#endif
+
 
 
 
@@ -83,13 +83,13 @@ struct utz_country
     char code[2  + 1];
     char name[60 + 1];
     utz_timezone** timezones;      // default timezone is first.
-    utz_usize       timezone_count;
+    utz_usize      timezone_count;
 };
 
 struct utz_timezones
 {
     const char* parsing_error;
-    const char* iana_version;
+    char iana_version[6 + 1];
 
     utz_country* countries;
     utz_usize    country_count;
@@ -141,7 +141,8 @@ typedef struct utz_conversion
 } utz_conversion;
 
 
-int utz_parse_iana_tzdb_targz(utz_timezones* tzs, void* targz, int targz_size, void* userdata = NULL, unsigned max_year = 2500);
+int  utz_parse_iana_tzdb_targz(utz_timezones* tzs, void* targz, int targz_size, void* allocator_userdata = NULL, unsigned max_year = 2500);
+void utz_free_timezones(utz_timezones* tzs, void* allocator_userdata = NULL);
 
 utz_time_t     utz_wall_time_from_utc(utz_timezone* tz, utz_time_t utc);
 utz_conversion utz_utc_from_wall_time(utz_timezone* tz, utz_time_t wall_time);
@@ -200,33 +201,34 @@ typedef int utz_bool;
 #define UtzDynCapacityPtr(ptr) ((ptr) ? (utz_usize*)((utz_u8*)(ptr) - 2 * sizeof(utz_usize)) : NULL)
 #define UtzDynCountPtr(ptr)    ((ptr) ? (utz_usize*)((utz_u8*)(ptr) - 1 * sizeof(utz_usize)) : NULL)
 
-#define UtzMakeDynArray(T, arrptr, init_cap) do {                                 \
-    utz_usize _utz__s = sizeof(T) * (init_cap) + 2 * sizeof(utz_usize);           \
-    *(arrptr) = (T*)(UtzCalloc((userdata), utz_u8, _utz__s) + 2 * sizeof(utz_usize)); \
-    *UtzDynCapacityPtr(*(arrptr)) = (init_cap);                                      \
-    *UtzDynCountPtr(*(arrptr)) = 0;                                                  \
+#define UtzMakeDynArray(T, arrptr, init_cap) do {                                       \
+    utz_usize _utz__s = sizeof(T) * (init_cap) + 2 * sizeof(utz_usize);                 \
+    *(arrptr) = (T*)(UtzCalloc((allocator_userdata), utz_u8, _utz__s) + 2 * sizeof(utz_usize)); \
+    *UtzDynCapacityPtr(*(arrptr)) = (init_cap);                                         \
+    *UtzDynCountPtr(*(arrptr)) = 0;                                                     \
 } while (0)
 
-#define UtzGrowDynArray(T, arrptr) do {                                           \
-    utz_usize _utz__c = (UtzDynCapacity(*(arrptr)) * 2);                         \
-    utz_usize _utz__s = sizeof(T) * _utz__c + 2 * sizeof(utz_usize);              \
-    utz_u8*   _utz__old_raw = (utz_u8*)(*(arrptr)) - 2 * sizeof(utz_usize);       \
-    *(arrptr) = (T*)(((utz_u8*)UtzRealloc((userdata), _utz__old_raw, utz_u8, _utz__s)) \
-              + 2 * sizeof(utz_usize));                                           \
-    *UtzDynCapacityPtr(*(arrptr)) = (_utz__c);                                       \
+#define UtzGrowDynArray(T, arrptr) do {                                                 \
+    utz_usize _utz__c = (UtzDynCapacity(*(arrptr)) * 2);                                \
+    utz_usize _utz__s = sizeof(T) * _utz__c + 2 * sizeof(utz_usize);                    \
+    utz_u8*   _utz__old_raw = (utz_u8*)(*(arrptr)) - 2 * sizeof(utz_usize);             \
+    *(arrptr) = (T*)(((utz_u8*)UtzRealloc((allocator_userdata), _utz__old_raw, utz_u8, _utz__s)) \
+              + 2 * sizeof(utz_usize));                                                 \
+    *UtzDynCapacityPtr(*(arrptr)) = (_utz__c);                                          \
 } while (0)
 
-#define UtzDynAppend(T, arrptr, elementptr) do {                    \
-    if (UtzDynCount(*(arrptr)) + 1 > UtzDynCapacity(*(arrptr)))   \
-        UtzGrowDynArray(T, (arrptr));                               \
-    (*(arrptr))[UtzDynCount(*(arrptr))] = *(elementptr);           \
-    *UtzDynCountPtr(*(arrptr)) += 1;                                   \
+#define UtzDynAppend(T, arrptr, elementptr) do {                \
+    if (UtzDynCount(*(arrptr)) + 1 > UtzDynCapacity(*(arrptr))) \
+        UtzGrowDynArray(T, (arrptr));                           \
+    (*(arrptr))[UtzDynCount(*(arrptr))] = *(elementptr);        \
+    *UtzDynCountPtr(*(arrptr)) += 1;                            \
 } while (0)
 
 #define UtzDynGetLast(arr) (UtzDynCount(arr) ? &(arr)[UtzDynCount(arr) - 1] : NULL)
 
 #define UtzFreeDynArray(arrptr) \
-    (UtzFree(userdata, (*(arrptr) ? UtzDynCapacity(*(arrptr)) : NULL)), *(arrptr) = NULL)
+    (UtzFree(allocator_userdata, (*(arrptr) ? UtzDynCapacityPtr(*(arrptr)) : NULL)), \
+     *(arrptr) = NULL)
 
 
 
@@ -422,7 +424,7 @@ inline static int utz_zlib_zhuffman_decode(utz_zlib_zbuf *a, utz_zlib_zhuffman *
    return utz_zlib_zhuffman_decode_slowpath(a, z);
 }
 
-static int utz_zlib_zexpand(utz_zlib_zbuf *z, char *zout, int n)  // need to make room for n bytes
+static int utz_zlib_zexpand(utz_zlib_zbuf *z, char *zout, int n, void* allocator_userdata)  // need to make room for n bytes
 {
    char *q;
    unsigned int cur, limit;
@@ -435,7 +437,7 @@ static int utz_zlib_zexpand(utz_zlib_zbuf *z, char *zout, int n)  // need to mak
       if(limit > UtzMaxValue(unsigned) / 2) return utz_zlib_err("outofmem", "Out of memory");
       limit *= 2;
    }
-   q = (char *) UtzRealloc(NULL /* incomplete */, z->zout_start, char, limit);
+   q = (char *) UtzRealloc(allocator_userdata, z->zout_start, char, limit);
    if (q == NULL) return utz_zlib_err("outofmem", "Out of memory");
    z->zout_start = q;
    z->zout       = q + cur;
@@ -457,7 +459,7 @@ static const int utz_zlib_zdist_base[32] = { 1,2,3,4,5,7,9,13,17,25,33,49,65,97,
 static const int utz_zlib_zdist_extra[32] =
 { 0,0,0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,12,12,13,13};
 
-static int utz_zlib_parse_huffman_block(utz_zlib_zbuf *a)
+static int utz_zlib_parse_huffman_block(utz_zlib_zbuf *a, void* allocator_userdata)
 {
    char *zout = a->zout;
    for(;;) {
@@ -465,7 +467,7 @@ static int utz_zlib_parse_huffman_block(utz_zlib_zbuf *a)
       if (z < 256) {
          if (z < 0) return utz_zlib_err("bad huffman code","Corrupt PNG"); // error in huffman codes
          if (zout >= a->zout_end) {
-            if (!utz_zlib_zexpand(a, zout, 1)) return 0;
+            if (!utz_zlib_zexpand(a, zout, 1, allocator_userdata)) return 0;
             zout = a->zout;
          }
          *zout++ = (char) z;
@@ -486,7 +488,7 @@ static int utz_zlib_parse_huffman_block(utz_zlib_zbuf *a)
          if (utz_zlib_zdist_extra[z]) dist += utz_zlib_zreceive(a, utz_zlib_zdist_extra[z]);
          if (zout - a->zout_start < dist) return utz_zlib_err("bad dist","Corrupt PNG");
          if (zout + len > a->zout_end) {
-            if (!utz_zlib_zexpand(a, zout, len)) return 0;
+            if (!utz_zlib_zexpand(a, zout, len, allocator_userdata)) return 0;
             zout = a->zout;
          }
          p = (utz_u8 *) (zout - dist);
@@ -549,7 +551,7 @@ static int utz_zlib_compute_huffman_codes(utz_zlib_zbuf *a)
    return 1;
 }
 
-static int utz_zlib_parse_uncompressed_block(utz_zlib_zbuf *a)
+static int utz_zlib_parse_uncompressed_block(utz_zlib_zbuf *a, void* allocator_userdata)
 {
    utz_u8 header[4];
    int len,nlen,k;
@@ -571,7 +573,7 @@ static int utz_zlib_parse_uncompressed_block(utz_zlib_zbuf *a)
    if (nlen != (len ^ 0xffff)) return utz_zlib_err("zlib corrupt","Corrupt PNG");
    if (a->zbuffer + len > a->zbuffer_end) return utz_zlib_err("read past buffer","Corrupt PNG");
    if (a->zout + len > a->zout_end)
-      if (!utz_zlib_zexpand(a, a->zout, len)) return 0;
+      if (!utz_zlib_zexpand(a, a->zout, len, allocator_userdata)) return 0;
    for (utz_usize i = 0; i < len; i++) a->zout[i] = a->zbuffer[i];
    a->zbuffer += len;
    a->zout += len;
@@ -621,7 +623,7 @@ Init algorithm:
 }
 */
 
-static int utz_zlib_parse_zlib(utz_zlib_zbuf *a, int parse_header)
+static int utz_zlib_parse_zlib(utz_zlib_zbuf *a, int parse_header, void* allocator_userdata)
 {
    int final, type;
    if (parse_header)
@@ -632,7 +634,7 @@ static int utz_zlib_parse_zlib(utz_zlib_zbuf *a, int parse_header)
       final = utz_zlib_zreceive(a,1);
       type = utz_zlib_zreceive(a,2);
       if (type == 0) {
-         if (!utz_zlib_parse_uncompressed_block(a)) return 0;
+         if (!utz_zlib_parse_uncompressed_block(a, allocator_userdata)) return 0;
       } else if (type == 3) {
          return 0;
       } else {
@@ -643,34 +645,34 @@ static int utz_zlib_parse_zlib(utz_zlib_zbuf *a, int parse_header)
          } else {
             if (!utz_zlib_compute_huffman_codes(a)) return 0;
          }
-         if (!utz_zlib_parse_huffman_block(a)) return 0;
+         if (!utz_zlib_parse_huffman_block(a, allocator_userdata)) return 0;
       }
    } while (!final);
    return 1;
 }
 
-static int utz_zlib_do_zlib(utz_zlib_zbuf *a, char *obuf, int olen, int exp, int parse_header)
+static int utz_zlib_do_zlib(utz_zlib_zbuf *a, char *obuf, int olen, int exp, int parse_header, void* allocator_userdata)
 {
    a->zout_start = obuf;
    a->zout       = obuf;
    a->zout_end   = obuf + olen;
    a->z_expandable = exp;
 
-   return utz_zlib_parse_zlib(a, parse_header);
+   return utz_zlib_parse_zlib(a, parse_header, allocator_userdata);
 }
 
-static char *utz_zlib_decode_malloc_guesssize_headerflag(const char *buffer, int len, int initial_size, int *outlen, int parse_header)
+static char *utz_zlib_decode_malloc_guesssize_headerflag(const char *buffer, int len, int initial_size, int *outlen, int parse_header, void* allocator_userdata)
 {
    utz_zlib_zbuf a;
-   char *p = (char *) UtzCalloc(NULL /* incomplete */, char, initial_size);
+   char *p = (char *) UtzCalloc(allocator_userdata, char, initial_size);
    if (p == NULL) return NULL;
    a.zbuffer = (utz_u8 *) buffer;
    a.zbuffer_end = (utz_u8 *) buffer + len;
-   if (utz_zlib_do_zlib(&a, p, initial_size, 1, parse_header)) {
+   if (utz_zlib_do_zlib(&a, p, initial_size, 1, parse_header, allocator_userdata)) {
       if (outlen) *outlen = (int) (a.zout - a.zout_start);
       return a.zout_start;
    } else {
-      UtzFree(NULL /* incomplete */, a.zout_start);
+      UtzFree(allocator_userdata, a.zout_start);
       return NULL;
    }
 }
@@ -847,11 +849,11 @@ static utz_string utz_substring(utz_string string, utz_usize start_index, utz_us
     return { length, string.data + start_index };
 }
 
-static utz_string utz_allocate_string(void* userdata, utz_string string, utz_bool valid_cstr = true)
+static utz_string utz_allocate_string(void* allocator_userdata, utz_string string, utz_bool valid_cstr = UTZ_TRUE)
 {
     utz_string result;
     result.length = string.length + (valid_cstr ? 1 : 0);
-    result.data   = UtzCalloc(userdata, char, result.length);
+    result.data   = UtzCalloc(allocator_userdata, char, result.length);
     for (utz_usize i = 0; i < string.length; i++)
         result.data[i] = string.data[i];
     return result;
@@ -1672,7 +1674,7 @@ static utz_bool utz_get_abbreviation(utz_time_range* range, utz_parsed_zone* zon
 }
 
 
-int utz_parse_iana_tzdb_targz(utz_timezones* tzs, void* targz, int targz_size, void* userdata, unsigned max_year)
+int utz_parse_iana_tzdb_targz(utz_timezones* tzs, void* targz, int targz_size, void* allocator_userdata, unsigned max_year)
 {
     //
     // helper macros
@@ -1698,6 +1700,11 @@ int utz_parse_iana_tzdb_targz(utz_timezones* tzs, void* targz, int targz_size, v
         sizeof(type), UtzOffsetOf(type, field), sizeof((UtzCtor1(type, 0)).field), \
         (unsigned char*)(what).data, (what).length))
 
+#define FreeNestedDynArray(arrptr, member) do {        \
+    for (utz_usize _utz__i = 0; _utz__i < UtzDynCount(*(arrptr)); _utz__i++) \
+        UtzFreeDynArray(&(*(arrptr))[_utz__i].member); \
+    UtzFreeDynArray(arrptr);                           \
+} while (0)
 
     //
     // macros for error reporting and tar handling.
@@ -1706,31 +1713,55 @@ int utz_parse_iana_tzdb_targz(utz_timezones* tzs, void* targz, int targz_size, v
     utz_string current_file = UtzStr("N/A");
     utz_string current_line = UtzStr("N/A");
 
+#ifndef UTZ_NO_SPRINTF
 #define ReportError(fmt, ...) do {                                      \
-    char* buf = UtzCalloc(userdata, char, 2048);                        \
+    char* buf = UtzCalloc(allocator_userdata, char, 2048);                        \
     UtzSprintf(buf, 2048, "Error: " fmt "\nFile: %.*s\nLine: %.*s\n",   \
                __VA_ARGS__, UtzStringArgs(current_file), UtzStringArgs(current_line)); \
     tzs->parsing_error = buf;                                           \
     return UTZ_FALSE;                                                   \
 } while (0)
+#else
+#define ReportError(fmt, ...) do { \
+    tzs->parsing_error = "Compile utz with sprintf support for a more detailed error."; \
+    goto cleanup;                  \
+} while (0)
+#endif
 
-#define ReportStaticError(str) do {                                     \
-    tzs->parsing_error = utz_allocate_string(userdata, UtzStr(str)).data;   \
-    return UTZ_FALSE;                                                   \
+#define ReportStaticError(str) do {                                       \
+    tzs->parsing_error = utz_allocate_string(allocator_userdata, UtzStr(str)).data; \
+    goto cleanup;                                                         \
 } while (0)
 
 #define MustFindFile(filename) do {                      \
     current_file = utz_get_tar_item(tar_data, filename); \
     if (!current_file.length) {                          \
-        utz_string _utz__s = (filename);               \
+        utz_string _utz__s = (filename);                 \
         ReportError("Missing file '%.*s' in iana tarball.", UtzStringArgs(_utz__s)); \
     } \
 } while (0)
 
+    typedef struct utz_rules_bundle
+    {
+        utz_string               name;
+        utz_parsed_savings_rule* rules;
+        utz_bool                 sorted_previously;
+    } utz_rules_bundle;
 
+    typedef struct utz_zones_bundle
+    {
+        utz_string       name;
+        utz_parsed_zone* zones;
+    } utz_zones_bundle;
+
+    utz_parsed_link*  last_parsed_link  = NULL;
+    utz_rules_bundle* last_rule_bundles = NULL;
+    utz_zones_bundle* last_zone_bundles = NULL;
 
 
     *tzs = UtzInit;
+
+    { // nedless scope to avoid "goto over variable initializations" error
 
     // We only care about the deflate stream inside of the .gzip file.
     // Skip the header (10 bytes) and footer (8 bytes) and only process the stream.
@@ -1744,7 +1775,8 @@ int utz_parse_iana_tzdb_targz(utz_timezones* tzs, void* targz, int targz_size, v
     int tar_size = 0;
     char* tarball = utz_zlib_decode_malloc_guesssize_headerflag(
         deflate_stream_start, deflate_stream_size,
-        1332000 /* estimated size */, &tar_size, 0 /* don't parse zlib header */
+        1332000 /* estimated size */, &tar_size, 0 /* don't parse zlib header */,
+        allocator_userdata
     );
     if (!tarball) ReportStaticError("Failed to decompress .tar.gz");
 
@@ -1761,7 +1793,8 @@ int utz_parse_iana_tzdb_targz(utz_timezones* tzs, void* targz, int targz_size, v
     while (UtzIsSpaceByte(current_file.data[current_file.length - 1]))
         current_file.length--;
 
-    tzs->iana_version = utz_allocate_string(userdata, current_file).data;
+    CopyToCharArray(current_file, tzs->iana_version, "reading iana version");
+
 
     //
     // parse tzs.
@@ -1779,8 +1812,9 @@ int utz_parse_iana_tzdb_targz(utz_timezones* tzs, void* targz, int targz_size, v
 
     UtzMakeDynArray(utz_timezone, &tzs->timezones, 128);
 
-    utz_parsed_link* links = NULL; // :free
+    utz_parsed_link* links = NULL;
     UtzMakeDynArray(utz_parsed_link, &links, 128);
+    last_parsed_link = links;
 
     for (utz_usize i = 0; i < UtzArrayCount(timezone_filenames); i++)
     {
@@ -1788,28 +1822,18 @@ int utz_parse_iana_tzdb_targz(utz_timezones* tzs, void* targz, int targz_size, v
         MustFindFile(filename);
         utz_string data = current_file;
 
-        struct rules_bundle_t
-        {
-            utz_string           name;
-            utz_parsed_savings_rule* rules;
-            utz_bool               sorted_previously;
-        };
-
-        struct zones_bundle_t
-        {
-            utz_string   name;
-            utz_parsed_zone* zones;
-        };
-
-        rules_bundle_t* rule_bundles = NULL; // :free
-        zones_bundle_t* zone_bundles = NULL; // :free
-        UtzMakeDynArray(rules_bundle_t, &rule_bundles, 32);
-        UtzMakeDynArray(zones_bundle_t, &zone_bundles, 32);
+        utz_rules_bundle* rule_bundles = NULL;
+        utz_zones_bundle* zone_bundles = NULL;
+        UtzMakeDynArray(utz_rules_bundle, &rule_bundles, 32);
+        UtzMakeDynArray(utz_zones_bundle, &zone_bundles, 32);
+        last_rule_bundles = rule_bundles;
+        last_zone_bundles = zone_bundles;
 
         // Add empty rule, simplifies lookup logic later.
         {
-            rules_bundle_t rule_bundle = UtzInit;
-            UtzDynAppend(rules_bundle_t, &rule_bundles, &rule_bundle);
+            utz_rules_bundle rule_bundle = UtzInit;
+            UtzDynAppend(utz_rules_bundle, &rule_bundles, &rule_bundle);
+            last_rule_bundles = rule_bundles;
         }
 
         while (utz_maybe_next_line(&data, &current_line))
@@ -1864,7 +1888,7 @@ int utz_parse_iana_tzdb_targz(utz_timezones* tzs, void* targz, int targz_size, v
 
                 if (utz_next(&line).length) ReportStaticError("Expected end of line but got garbage.");
 
-                rules_bundle_t* rule_bundle = NULL;
+                utz_rules_bundle* rule_bundle = NULL;
                 for (utz_usize i = 0; i < UtzDynCount(rule_bundles); i++)
                 {
                     if (utz_equals(rule_bundles[i].name, name))
@@ -1875,8 +1899,10 @@ int utz_parse_iana_tzdb_targz(utz_timezones* tzs, void* targz, int targz_size, v
                 }
                 if (!rule_bundle)
                 {
-                    rules_bundle_t zero = UtzInit;
-                    UtzDynAppend(rules_bundle_t, &rule_bundles, &zero);
+                    utz_rules_bundle zero = UtzInit;
+                    UtzDynAppend(utz_rules_bundle, &rule_bundles, &zero);
+                    last_rule_bundles = rule_bundles;
+
                     rule_bundle = UtzDynGetLast(rule_bundles);
                     rule_bundle->name = name;
                     UtzMakeDynArray(utz_parsed_savings_rule, &rule_bundle->rules, 32);
@@ -1900,7 +1926,7 @@ int utz_parse_iana_tzdb_targz(utz_timezones* tzs, void* targz, int targz_size, v
                     ReportStaticError("Missing zone.name.");
                 utz_string name = utz_next(&line);
 
-                zones_bundle_t* zone_bundle = NULL;
+                utz_zones_bundle* zone_bundle = NULL;
                 for (utz_usize i = 0; i < UtzDynCount(zone_bundles); i++)
                 {
                     if (utz_equals(zone_bundles[i].name, name))
@@ -1911,8 +1937,10 @@ int utz_parse_iana_tzdb_targz(utz_timezones* tzs, void* targz, int targz_size, v
                 }
                 if (!zone_bundle)
                 {
-                    zones_bundle_t zero = UtzInit;
-                    UtzDynAppend(zones_bundle_t, &zone_bundles, &zero);
+                    utz_zones_bundle zero = UtzInit;
+                    UtzDynAppend(utz_zones_bundle, &zone_bundles, &zero);
+                    last_zone_bundles = zone_bundles;
+
                     zone_bundle = UtzDynGetLast(zone_bundles);
                     zone_bundle->name = name;
                     UtzMakeDynArray(utz_parsed_zone, &zone_bundle->zones, 32);
@@ -2041,6 +2069,7 @@ int utz_parse_iana_tzdb_targz(utz_timezones* tzs, void* targz, int targz_size, v
                 if (utz_next(&line).length) ReportStaticError("Expected end of line but got garbage.");
 
                 UtzDynAppend(utz_parsed_link, &links, &link);
+                last_parsed_link = links;
             }
             else
             {
@@ -2053,7 +2082,7 @@ int utz_parse_iana_tzdb_targz(utz_timezones* tzs, void* targz, int targz_size, v
 
         for (utz_usize zone_bundle_idx = 0; zone_bundle_idx < UtzDynCount(zone_bundles); zone_bundle_idx++)
         {
-            zones_bundle_t* it = &zone_bundles[zone_bundle_idx];
+            utz_zones_bundle* it = &zone_bundles[zone_bundle_idx];
 
             // @Reconsider binary search
             utz_bool is_alias = UTZ_FALSE;
@@ -2073,7 +2102,7 @@ int utz_parse_iana_tzdb_targz(utz_timezones* tzs, void* targz, int targz_size, v
                 CopyToCharArray(it->name, timezone->name, "making a new utz_timezone");
             }
 
-            utz_time_range* time_ranges = NULL; // :free
+            utz_time_range* time_ranges = NULL;
             UtzMakeDynArray(utz_time_range, &time_ranges, 64);
 
             utz_time_t             cursor   = UTZ_BEGINNING_OF_TIME;
@@ -2083,7 +2112,7 @@ int utz_parse_iana_tzdb_targz(utz_timezones* tzs, void* targz, int targz_size, v
                 utz_parsed_zone* zone = &it->zones[zone_idx];
 
                 // @Reconsider binary search
-                rules_bundle_t* rule_bundle = NULL;
+                utz_rules_bundle* rule_bundle = NULL;
                 for (utz_usize i = 0; i < UtzDynCount(rule_bundles); i++)
                 {
                     if (utz_equals(rule_bundles[i].name, zone->rule))
@@ -2223,63 +2252,8 @@ int utz_parse_iana_tzdb_targz(utz_timezones* tzs, void* targz, int targz_size, v
             timezone->range_count = UtzDynCount(time_ranges);
         }
 
-        /*
-        For (time_ranges)
-        {
-            if (it->since < 132223104000000000llu) continue;
-
-            Debug("short: % since: % offset: %:%",
-                   string_format(it->zone_abbreviation, 7), debug_print_filetime(it->since),
-                   it->offset_seconds / 3600, abs(it->offset_seconds / 60 - 60 * (it->offset_seconds / 3600)));
-        }
-
-        Debug("Parsed rules:");
-        For (rules)
-        {
-            Debug("Rule: %", it->key);
-            For (it->value)
-            {
-                Date date = {};
-                utc_date_from_filetime(it->active_since, &date);
-
-                Debug("active_since: %-%-% %:%:% offset (s): % offset (h:m): %:% subs: %",
-                      u64_format(date.year, 4), u64_format(date.month,  2), u64_format(date.day,    2),
-                      u64_format(date.hour, 2), u64_format(date.minute, 2), u64_format(date.second, 2),
-                      it->offset_from_base_offset_seconds,
-                      it->offset_from_base_offset_seconds / 3600,
-                      abs(it->offset_from_base_offset_seconds / 60 - 60 * (it->offset_from_base_offset_seconds / 3600)),
-                      it->abbreviation_substitution);
-            }
-            Debug("---------------------------------");
-        }
-
-        Debug("Parsed tzs:");
-        For (zones)
-        {
-            Debug("Zone: %", it->key);
-            For (it->value)
-            {
-                Date date = {};
-                utc_date_from_filetime(it->until, &date);
-
-                Debug("rule: % until: %-%-% %:%:% offset (s): % offset (h): %:% format: %",
-                      it->rule, u64_format(date.year, 4), u64_format(date.month,  2), u64_format(date.day,    2),
-                                u64_format(date.hour, 2), u64_format(date.minute, 2), u64_format(date.second, 2),
-                      it->standard_offset_seconds,
-                      it->standard_offset_seconds / 3600,
-                      abs(it->standard_offset_seconds / 60 - 60 * (it->standard_offset_seconds / 3600)),
-                      it->abbreviation_format);
-            }
-            Debug("---------------------------------");
-        }
-
-        Debug("Parsed links:");
-        For (links)
-        {
-            Debug("% => %", it->zone_alias, it->zone_main);
-        }
-        Debug("---------------------------------");
-        */
+        FreeNestedDynArray(&last_rule_bundles, rules);
+        FreeNestedDynArray(&last_zone_bundles, zones);
     }
 
     // resolve timezones and links.
@@ -2390,7 +2364,7 @@ int utz_parse_iana_tzdb_targz(utz_timezones* tzs, void* targz, int targz_size, v
         if (!utz_parse_latitude_and_longitude(latlong, &zone->coordinate_latitude_seconds, &zone->coordinate_longitude_seconds))
             ReportStaticError("Bad latitude/longitude.");
 
-        while (true)
+        while (UTZ_TRUE)
         {
             utz_string code = { 0, comma_separated_codes.data };
             while (comma_separated_codes.length && comma_separated_codes.data[0] != ',')
@@ -2486,10 +2460,16 @@ int utz_parse_iana_tzdb_targz(utz_timezones* tzs, void* targz, int targz_size, v
         // }
     }
 
-    return UTZ_TRUE;
+    }
+cleanup:;
+    UtzFreeDynArray(&last_parsed_link);
+    FreeNestedDynArray(&last_rule_bundles, rules);
+    FreeNestedDynArray(&last_zone_bundles, zones);
+    return (tzs->parsing_error == NULL);
 
 #undef CopyToCharArray
 #undef UtzOffsetOf
+#undef FreeNestedDynArray
 #undef SortByCharArray
 #undef FindByCharArray
 #undef ReportError
@@ -2497,6 +2477,28 @@ int utz_parse_iana_tzdb_targz(utz_timezones* tzs, void* targz, int targz_size, v
 #undef MustFindFile
 }
 
+void utz_free_timezones(utz_timezones* tzs, void* allocator_userdata)
+{
+    for (utz_usize ci = 0; ci < UtzDynCount(tzs->countries); ci++)
+    {
+        utz_country* country = &tzs->countries[ci];
+        UtzFreeDynArray(&country->timezones);
+    }
+
+    for (utz_usize zi = 0; zi < UtzDynCount(tzs->timezones); zi++)
+    {
+        utz_timezone* timezone = &tzs->timezones[zi];
+        if (timezone->alias_of) continue;
+        UtzFreeDynArray(&timezone->ranges);
+    }
+
+    UtzFreeDynArray(&tzs->countries);
+    UtzFreeDynArray(&tzs->timezones);
+
+#ifndef UTZ_NO_SPRINTF
+    UtzFree(allocator_userdata, (void*)tzs->parsing_error);
+#endif
+}
 
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////

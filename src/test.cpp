@@ -60,5 +60,6 @@ int main(int argc, char** argv)
 
     printf("CCA SIZE: %llu\n", cca_size);
 
+    utz_free_timezones(&tzs);
     return result ? 0 : 1;
 }
